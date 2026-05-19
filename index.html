@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>급여 정리 파일 생성기</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', sans-serif;
+    max-width: 640px;
+    margin: 40px auto;
+    padding: 20px;
+    color: #202124;
+    background: #fafafa;
+  }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #5f6368; font-size: 14px; margin-bottom: 24px; }
+  .card { background: white; border: 1px solid #e0e0e0; border-radius: 10px; padding: 20px; margin-bottom: 14px; }
+  .upload label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 14px; }
+  .upload input[type=file] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa; }
+  .options { display: flex; gap: 12px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .options input[type=text] { flex: 1; min-width: 200px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; }
+  button {
+    padding: 12px 24px;
+    background: #1a73e8;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+  }
+  button:hover { background: #1557b0; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  .log {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 8px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    max-height: 320px;
+    overflow-y: auto;
+    min-height: 60px;
+  }
+  .log:empty::before { content: '로그가 여기에 표시됩니다.'; color: #888; }
+  .hint { color: #5f6368; font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <h1>급여 정리 파일 생성기</h1>
+  <p class="sub">Shifts Details / Summary CSV를 업로드하면 직원별 시트로 정리된 엑셀 파일을 생성합니다.</p>
+
+  <div class="card upload">
+    <label>1. Details 파일 (필수)</label>
+    <input type="file" id="detailsFile" accept=".csv,.xls,.xlsx">
+    <div class="hint">예: Shifts_05-01-2026_05-15-2026.xls - Details.csv</div>
+  </div>
+
+  <div class="card upload">
+    <label>2. Summary 파일 (선택)</label>
+    <input type="file" id="summaryFile" accept=".csv,.xls,.xlsx">
+    <div class="hint">팁 정보는 무시되며 근무 시간만 추출됩니다.</div>
+  </div>
+
+  <div class="card">
+    <label style="display:block;font-weight:600;margin-bottom:8px;font-size:14px;">출력 파일명</label>
+    <input type="text" id="filename" value="급여정리_05-01-05-15.xlsx" style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:6px;">
+  </div>
+
+  <button id="generate">급여 파일 생성</button>
+  <div class="log" id="log"></div>
+
+<script>
+const HEADERS = [
+  'Employee name', 'Account', 'Date',
+  'Clocked In', 'Clocked Out', 'Duration',
+  'Unpaid Break Time', 'Paid Break Time',
+  'Payable Hours', 'Regular Hours', 'Overtime Hours'
+];
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+function to24Hour(timeStr) {
+  if (timeStr === null || timeStr === undefined) return '';
+  const s = String(timeStr).trim();
+  if (!s) return '';
+  if (/\(\+1\s*day\)/i.test(s)) return s;
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!m) return s;
+  let h = parseInt(m[1], 10);
+  const min = m[2];
+  const sec = m[3] || '00';
+  const ampm = m[4] ? m[4].toUpperCase() : null;
+  if (ampm === 'PM' && h < 12) h += 12;
+  else if (ampm === 'AM' && h === 12) h = 0;
+  return String(h).padStart(2, '0') + ':' + min + ':' + sec;
+}
+
+async function readFile(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array', cellDates: false, raw: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+}
+
+function findKey(row, candidates) {
+  const keys = Object.keys(row);
+  const norm = s => s.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '');
+  for (const c of candidates) {
+    const target = norm(c);
+    const found = keys.find(k => norm(k) === target);
+    if (found) return found;
+  }
+  for (const c of candidates) {
+    const target = norm(c);
+    const found = keys.find(k => norm(k).includes(target));
+    if (found) return found;
+  }
+  return null;
+}
+
+function sanitizeSheetName(name) {
+  return name.replace(/[\\\/\?\*\[\]:]/g, '_').slice(0, 31);
+}
+
+async function generate() {
+  const btn = document.getElementById('generate');
+  btn.disabled = true;
+  document.getElementById('log').textContent = '';
+
+  try {
+    const detailsFile = document.getElementById('detailsFile').files[0];
+    if (!detailsFile) {
+      alert('Details 파일을 업로드해주세요');
+      return;
+    }
+    const filename = document.getElementById('filename').value.trim() || '급여정리.xlsx';
+
+    log('Details 파일 읽는 중...');
+    const rows = await readFile(detailsFile);
+    log(`${rows.length}개 행 로드됨`);
+
+    if (rows.length === 0) {
+      alert('데이터가 없습니다');
+      return;
+    }
+
+    const sample = rows[0];
+    const k = {
+      name: findKey(sample, ['Employee Name', 'Employee']),
+      account: findKey(sample, ['Account']),
+      date: findKey(sample, ['Date']),
+      in: findKey(sample, ['Clocked In']),
+      out: findKey(sample, ['Clocked Out']),
+      duration: findKey(sample, ['Duration']),
+      unpaid: findKey(sample, ['Unpaid Break Time', 'Unpaid Break']),
+      paid: findKey(sample, ['Paid Break Time', 'Paid Break']),
+      payable: findKey(sample, ['Payable Hours', 'payable Hours']),
+      regular: findKey(sample, ['Regular Hours']),
+      overtime: findKey(sample, ['Overtime Hours']),
+    };
+
+    if (!k.name) {
+      log('컬럼 후보: ' + Object.keys(sample).join(', '));
+      throw new Error('Employee Name 컬럼을 찾을 수 없습니다.');
+    }
+    log('컬럼 매핑 완료');
+
+    const byEmployee = {};
+    for (const r of rows) {
+      const name = (r[k.name] || '').toString().trim();
+      if (!name) continue;
+      if (!byEmployee[name]) byEmployee[name] = [];
+      byEmployee[name].push(r);
+    }
+
+    const names = Object.keys(byEmployee).sort();
+    log(`직원 수: ${names.length}`);
+
+    const wb = XLSX.utils.book_new();
+    const usedSheetNames = new Set();
+
+    for (const name of names) {
+      const sheetRows = [HEADERS];
+      for (const r of byEmployee[name]) {
+        sheetRows.push([
+          r[k.name] || '',
+          k.account ? (r[k.account] || '') : '',
+          k.date ? (r[k.date] || '') : '',
+          k.in ? to24Hour(r[k.in]) : '',
+          k.out ? to24Hour(r[k.out]) : '',
+          k.duration ? (r[k.duration] || '') : '',
+          k.unpaid ? (r[k.unpaid] || '') : '',
+          k.paid ? (r[k.paid] || '') : '',
+          k.payable ? (r[k.payable] || '') : '',
+          k.regular ? (r[k.regular] || '') : '',
+          k.overtime ? (r[k.overtime] || '') : '',
+        ]);
+      }
+      const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+      ws['!cols'] = [
+        { wch: 18 }, { wch: 12 }, { wch: 12 },
+        { wch: 14 }, { wch: 18 }, { wch: 10 },
+        { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 14 }
+      ];
+      let safeName = sanitizeSheetName(name);
+      let dedupe = 2;
+      while (usedSheetNames.has(safeName)) {
+        const suffix = `_${dedupe++}`;
+        safeName = sanitizeSheetName(name).slice(0, 31 - suffix.length) + suffix;
+      }
+      usedSheetNames.add(safeName);
+      XLSX.utils.book_append_sheet(wb, ws, safeName);
+      log(`시트 생성: ${safeName} (${byEmployee[name].length}행)`);
+    }
+
+    XLSX.writeFile(wb, filename);
+    log('');
+    log('완료! 파일이 다운로드되었습니다: ' + filename);
+    log('Google Sheets로 열기: drive.google.com에 파일을 드래그하면 자동 변환됩니다.');
+  } catch (e) {
+    log('오류: ' + e.message);
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('generate').addEventListener('click', generate);
+</script>
+</body>
+</html>
