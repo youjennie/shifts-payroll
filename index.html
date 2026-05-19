@@ -110,7 +110,34 @@ async function readFile(file) {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array', cellDates: false, raw: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false, blankrows: false });
+  if (aoa.length === 0) return [];
+
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '');
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(aoa.length, 20); i++) {
+    const cells = aoa[i].map(norm);
+    if (cells.includes('employeename') && cells.some(c => c === 'clockedin' || c === 'date')) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    return aoa.length > 0 ? XLSX.utils.sheet_to_json(ws, { defval: '', raw: false }) : [];
+  }
+
+  const headers = aoa[headerIdx].map(h => String(h || '').trim());
+  const rows = [];
+  for (let i = headerIdx + 1; i < aoa.length; i++) {
+    const row = aoa[i];
+    if (!row || row.every(c => c === '' || c === null || c === undefined)) continue;
+    const obj = {};
+    for (let j = 0; j < headers.length; j++) {
+      if (headers[j]) obj[headers[j]] = row[j] !== undefined ? row[j] : '';
+    }
+    rows.push(obj);
+  }
+  return rows;
 }
 
 function findKey(row, candidates) {
