@@ -68,7 +68,7 @@
 </style>
 </head>
 <body>
-  <div class="build-stamp">build: 2026-05-19 01:27 KST</div>
+  <div class="build-stamp">build: 2026-05-19 01:31 KST</div>
   <h1>급여 정리 파일 생성기</h1>
   <p class="sub">Shifts Details 파일을 업로드하면 직원별 시트로 정리된 엑셀 파일을 생성합니다.</p>
 
@@ -234,6 +234,12 @@ async function generate() {
     const wb = XLSX.utils.book_new();
     const usedSheetNames = new Set();
 
+    const toNum = v => {
+      if (v === '' || v === null || v === undefined) return '';
+      const n = Number(String(v).replace(/[, ]/g, ''));
+      return isNaN(n) ? v : n;
+    };
+
     for (const name of names) {
       const sheetRows = [HEADERS];
       for (const r of byEmployee[name]) {
@@ -243,20 +249,40 @@ async function generate() {
           k.date ? (r[k.date] || '') : '',
           k.in ? to24Hour(r[k.in]) : '',
           k.out ? to24Hour(r[k.out]) : '',
-          k.duration ? (r[k.duration] || '') : '',
-          k.unpaid ? (r[k.unpaid] || '') : '',
-          k.paid ? (r[k.paid] || '') : '',
-          k.payable ? (r[k.payable] || '') : '',
-          k.regular ? (r[k.regular] || '') : '',
-          k.overtime ? (r[k.overtime] || '') : '',
+          k.duration ? toNum(r[k.duration]) : '',
+          k.unpaid ? toNum(r[k.unpaid]) : '',
+          k.paid ? toNum(r[k.paid]) : '',
+          k.payable ? toNum(r[k.payable]) : '',
+          k.regular ? toNum(r[k.regular]) : '',
+          k.overtime ? toNum(r[k.overtime]) : '',
         ]);
       }
+
+      const dataRowCount = byEmployee[name].length;
+      const firstDataRow = 2;
+      const lastDataRow = dataRowCount + 1;
+      const sumCols = ['F','G','H','I','J','K'];
+      const totalRow = ['Total','','','','',''];
+      for (const col of sumCols) {
+        totalRow.push({ f: `SUM(${col}${firstDataRow}:${col}${lastDataRow})` });
+      }
+      sheetRows.push(totalRow);
+
       const ws = XLSX.utils.aoa_to_sheet(sheetRows);
       ws['!cols'] = [
         { wch: 18 }, { wch: 12 }, { wch: 12 },
         { wch: 14 }, { wch: 18 }, { wch: 10 },
         { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 14 }
       ];
+
+      const totalRowNum = dataRowCount + 2;
+      for (let c = 0; c < HEADERS.length; c++) {
+        const addr = XLSX.utils.encode_cell({ r: totalRowNum - 1, c });
+        if (ws[addr]) {
+          ws[addr].s = { font: { bold: true }, fill: { fgColor: { rgb: 'FFF3F4F6' } } };
+        }
+      }
+
       let safeName = sanitizeSheetName(name);
       let dedupe = 2;
       while (usedSheetNames.has(safeName)) {
@@ -265,7 +291,7 @@ async function generate() {
       }
       usedSheetNames.add(safeName);
       XLSX.utils.book_append_sheet(wb, ws, safeName);
-      log(`시트 생성: ${safeName} (${byEmployee[name].length}행)`);
+      log(`시트 생성: ${safeName} (${dataRowCount}행 + 합계)`);
     }
 
     XLSX.writeFile(wb, filename);
