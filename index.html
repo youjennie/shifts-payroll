@@ -68,7 +68,7 @@
 </style>
 </head>
 <body>
-  <div class="build-stamp">build: 2026-05-19 01:31 KST</div>
+  <div class="build-stamp">build: 2026-05-19 01:33 KST</div>
   <h1>급여 정리 파일 생성기</h1>
   <p class="sub">Shifts Details 파일을 업로드하면 직원별 시트로 정리된 엑셀 파일을 생성합니다.</p>
 
@@ -262,7 +262,7 @@ async function generate() {
       const firstDataRow = 2;
       const lastDataRow = dataRowCount + 1;
       const sumCols = ['F','G','H','I','J','K'];
-      const totalRow = ['Total','','','','',''];
+      const totalRow = ['Total','','','',''];
       for (const col of sumCols) {
         totalRow.push({ f: `SUM(${col}${firstDataRow}:${col}${lastDataRow})` });
       }
